@@ -15,10 +15,11 @@ The system must generalize across multiple tables, handle confirmation waits, ti
 
 The robot's behavior is modeled as a **finite state machine** using `smach`/`smach_ros`, driven by real navigation through **Nav2** in a TurtleBot3 Gazebo simulation.
 
+```
 [HOME] --order received--> [GO_TO_KITCHEN] --arrived--> [GO_TO_TABLE] --arrived--> [RETURN_HOME] --> [HOME]
-| |
-+---- failed ----> [ORDER_FAILED]
-
+                                  |                              |
+                                  +---- failed ----> [ORDER_FAILED]
+```
 
 **Key design decision — genericity over hardcoding:** every navigation call (to kitchen, to any table, back home) goes through a single reusable `NavHelper.go_to(waypoint_name)` method that sends a `NavigateToPose` action goal to Nav2 and blocks until success/failure. Table identity is passed as **state machine userdata** (`table_id`), not branched on in code — so `table1`, `table2`, `table3` are just different waypoint keys, and adding a `table4` requires zero code changes, only a new entry in `waypoints.py`.
 
@@ -32,15 +33,16 @@ The robot's behavior is modeled as a **finite state machine** using `smach`/`sma
 
 ## Repository Structure
 
+```
 goat_butler_robot/
 ├── goat_butler_robot/
-│ ├── init.py
-│ ├── waypoints.py # named locations -> (x, y, yaw) coordinates
-│ └── butler_state_machine.py # SMACH states, NavHelper, main entry point
+│   ├── __init__.py
+│   ├── waypoints.py           # named locations -> (x, y, yaw) coordinates
+│   └── butler_state_machine.py # SMACH states, NavHelper, main entry point
 ├── package.xml
 ├── setup.py
 └── README.md
-
+```
 
 ## Setup & Running
 
