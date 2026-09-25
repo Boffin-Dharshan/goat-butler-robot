@@ -16,12 +16,22 @@ The system must generalize across multiple tables, handle confirmation waits, ti
 The robot's behavior is modeled as a **finite state machine** using `smach`/`smach_ros`, driven by real navigation through **Nav2** in a TurtleBot3 Gazebo simulation.
 
 ```
-[HOME] --order received--> [GO_TO_KITCHEN] --arrived--> [GO_TO_TABLE] --arrived--> [RETURN_HOME] --> [HOME]
+[HOME] --order received--> [GO_TO_KITCHEN] --arrived--> [WAIT_KITCHEN_CONFIRM]
                                   |                              |
+                                  |                   confirmed  |  timeout
+                                  |                       v      v
+                                  |               [GO_TO_TABLE]  |
+                                  |                       |      |
+                                  |                  arrived     |
+                                  |                       v      v
+                                  |                  [RETURN_HOME] --> [HOME]
+                                  |
                                   +---- failed ----> [ORDER_FAILED]
 ```
 
 **Key design decision — genericity over hardcoding:** every navigation call (to kitchen, to any table, back home) goes through a single reusable `NavHelper.go_to(waypoint_name)` method that sends a `NavigateToPose` action goal to Nav2 and blocks until success/failure. Table identity is passed as **state machine userdata** (`table_id`), not branched on in code — so `table1`, `table2`, `table3` are just different waypoint keys, and adding a `table4` requires zero code changes, only a new entry in `waypoints.py`.
+
+Confirmation waiting follows the same principle: a single reusable `ConfirmListener` class subscribes to any given topic and blocks (with a timeout) until it receives a positive confirmation. It's parameterized by topic name, not duplicated per location — the same class will be reused for table-side confirmation in Milestone 3.
 
 ## Tech Stack
 
@@ -56,7 +66,7 @@ goat_butler_robot/
 ├── goat_butler_robot/
 │   ├── __init__.py
 │   ├── waypoints.py           # named locations -> (x, y, yaw) coordinates
-│   └── butler_state_machine.py # SMACH states, NavHelper, main entry point
+│   └── butler_state_machine.py # SMACH states, NavHelper, ConfirmListener, main entry point
 ├── package.xml
 ├── setup.py
 └── README.md
@@ -95,12 +105,22 @@ ros2 launch turtlebot3_navigation2 navigation2.launch.py use_sim_time:=true map:
 ros2 run goat_butler_robot butler_state_machine table1
 ```
 
+### Simulating kitchen confirmation (Milestone 2)
+
+After the robot reaches the kitchen, it waits up to 15 seconds for a confirmation signal. Trigger it manually from another terminal:
+
+```bash
+ros2 topic pub --once /kitchen/confirm std_msgs/msg/Bool "{data: true}"
+```
+
+If no confirmation is published within 15 seconds, the robot skips the table delivery and returns directly home.
+
 ## Milestones
 
 | # | Description | Status |
 |---|---|---|
 | 1 | Single order: home → kitchen → table → home, no confirmation | ✅ Complete |
-| 2 | Wait for confirmation at kitchen/table, timeout → return home | 🚧 In progress |
+| 2 | Wait for confirmation at kitchen, timeout → return home | ✅ Complete |
 | 3 | Confirmation handling at both kitchen and table with fallback routing | ⬜ Planned |
 | 4 | Order cancellation mid-route | ⬜ Planned |
 | 5 | Multiple simultaneous orders across tables | ⬜ Planned |
@@ -109,9 +129,9 @@ ros2 run goat_butler_robot butler_state_machine table1
 
 ## Demo
 
-<!-- TODO: replace this line with the final github.com/user-attachments/assets/... URL
-     once the Milestone-1.mp4 upload finishes — "Uploading..." is a placeholder
-     GitHub shows mid-upload, not the embeddable link. -->
+The following video demonstrates Milestone 1 of the Goat Butler Robot, including autonomous navigation from the home position to the kitchen, delivery to the selected table, and return to home.
+
+[▶️ Watch Milestone 1 Demo Video](https://drive.google.com/file/d/1-HTyKQ74O6ooTu3HuX1iJB4o0SWeFfJf/view?usp=drive_link)
 
 ## Notes
 
