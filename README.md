@@ -37,7 +37,6 @@ The following map represents the restaurant environment used for the TurtleBot3 
 
 <img width="403" height="375" alt="Screenshot from 2026-09-26 00-58-35" src="https://github.com/user-attachments/assets/ca47ec63-5390-4aef-89c4-0bb727f246b2" />
 
-
 ### Navigation Waypoints
 
 | Location | Purpose |
@@ -63,9 +62,21 @@ goat_butler_robot/
 └── README.md
 ```
 
-## Setup & Running
+## Prerequisites
 
-Prerequisites: ROS 2 Humble, TurtleBot3 packages, Nav2, `smach`/`smach_ros` installed.
+- Ubuntu 22.04 + ROS 2 Humble installed
+- TurtleBot3 and Nav2 packages:
+  ```bash
+  sudo apt install ros-humble-turtlebot3* ros-humble-turtlebot3-simulations ros-humble-navigation2 ros-humble-nav2-bringup
+  export TURTLEBOT3_MODEL=waffle_pi
+  echo "export TURTLEBOT3_MODEL=waffle_pi" >> ~/.bashrc
+  ```
+- SMACH:
+  ```bash
+  sudo apt install ros-humble-smach ros-humble-smach-ros
+  ```
+
+## Setup & Running
 
 ```bash
 # Build
@@ -98,9 +109,9 @@ ros2 run goat_butler_robot butler_state_machine table1
 
 ## Demo
 
-Uploading Milestone-1.mp4…
-
-
+<!-- TODO: replace this line with the final github.com/user-attachments/assets/... URL
+     once the Milestone-1.mp4 upload finishes — "Uploading..." is a placeholder
+     GitHub shows mid-upload, not the embeddable link. -->
 
 ## Notes
 
