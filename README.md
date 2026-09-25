@@ -31,6 +31,25 @@ The robot's behavior is modeled as a **finite state machine** using `smach`/`sma
 - **TurtleBot3** in **Gazebo** — simulated robot and environment
 - **RViz2** — visualization, localization (AMCL), and manual goal testing
 
+## Environment Map
+
+The following map represents the restaurant environment used for the TurtleBot3 simulation. It defines the fixed navigation waypoints for the **home position, kitchen, and three customer tables**.
+
+<img width="403" height="375" alt="Screenshot from 2026-09-26 00-58-35" src="https://github.com/user-attachments/assets/ca47ec63-5390-4aef-89c4-0bb727f246b2" />
+
+
+### Navigation Waypoints
+
+| Location | Purpose |
+|---|---|
+| 🏠 Home | Robot starting and return position |
+| 🍳 Kitchen | Food collection point |
+| Table 1 | Customer delivery point |
+| Table 2 | Customer delivery point |
+| Table 3 | Customer delivery point |
+
+The robot uses these locations as named navigation waypoints. The corresponding coordinates are stored in `waypoints.py`, allowing the navigation logic to remain generic and independent of individual table IDs.
+
 ## Repository Structure
 
 ```
@@ -79,7 +98,7 @@ ros2 run goat_butler_robot butler_state_machine table1
 
 ## Demo
 
-
+Uploading Milestone-1.mp4…
 
 
 
