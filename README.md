@@ -79,7 +79,9 @@ ros2 run goat_butler_robot butler_state_machine table1
 
 ## Demo
 
-*(Add a short Gazebo screen recording or GIF here once available)*
+
+
+
 
 ## Notes
 
