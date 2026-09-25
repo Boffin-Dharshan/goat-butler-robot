@@ -1,2 +1,84 @@
-# goat-butler-robot
-ROS 2 state-machine based restaurant delivery robot — assessment for Goat Robotics ROS De role
+# Goat Butler Robot
+
+A ROS 2 based restaurant delivery robot built for the Goat Robotics ROS Developer assessment. The robot autonomously handles food delivery for a café with 3 tables, replacing a human butler for order collection and delivery.
+
+## Problem Statement
+
+The robot starts at a home position. When an order is received for a given table, it:
+1. Navigates to the kitchen to collect the food
+2. Navigates to the customer's table to deliver it
+3. Returns to the home position
+
+The system must generalize across multiple tables, handle confirmation waits, timeouts, and order cancellations, without hardcoding logic per table.
+
+## Architecture
+
+The robot's behavior is modeled as a **finite state machine** using `smach`/`smach_ros`, driven by real navigation through **Nav2** in a TurtleBot3 Gazebo simulation.
+
+[HOME] --order received--> [GO_TO_KITCHEN] --arrived--> [GO_TO_TABLE] --arrived--> [RETURN_HOME] --> [HOME]
+| |
++---- failed ----> [ORDER_FAILED]
+
+
+**Key design decision — genericity over hardcoding:** every navigation call (to kitchen, to any table, back home) goes through a single reusable `NavHelper.go_to(waypoint_name)` method that sends a `NavigateToPose` action goal to Nav2 and blocks until success/failure. Table identity is passed as **state machine userdata** (`table_id`), not branched on in code — so `table1`, `table2`, `table3` are just different waypoint keys, and adding a `table4` requires zero code changes, only a new entry in `waypoints.py`.
+
+## Tech Stack
+
+- **ROS 2 Humble**
+- **SMACH / smach_ros** — state machine framework
+- **Nav2** — path planning and navigation
+- **TurtleBot3** in **Gazebo** — simulated robot and environment
+- **RViz2** — visualization, localization (AMCL), and manual goal testing
+
+## Repository Structure
+
+goat_butler_robot/
+├── goat_butler_robot/
+│ ├── init.py
+│ ├── waypoints.py # named locations -> (x, y, yaw) coordinates
+│ └── butler_state_machine.py # SMACH states, NavHelper, main entry point
+├── package.xml
+├── setup.py
+└── README.md
+
+
+## Setup & Running
+
+Prerequisites: ROS 2 Humble, TurtleBot3 packages, Nav2, `smach`/`smach_ros` installed.
+
+```bash
+# Build
+cd ~/ros2_ws
+colcon build --packages-select goat_butler_robot
+source install/setup.bash
+
+# Terminal 1: launch simulation
+ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+
+# Terminal 2: launch navigation
+ros2 launch turtlebot3_navigation2 navigation2.launch.py use_sim_time:=true map:=<map.yaml>
+# Then set the 2D Pose Estimate in RViz to localize the robot
+
+# Terminal 3: run the butler state machine for a given table
+ros2 run goat_butler_robot butler_state_machine table1
+```
+
+## Milestones
+
+| # | Description | Status |
+|---|---|---|
+| 1 | Single order: home → kitchen → table → home, no confirmation | ✅ Complete |
+| 2 | Wait for confirmation at kitchen/table, timeout → return home | 🚧 In progress |
+| 3 | Confirmation handling at both kitchen and table with fallback routing | ⬜ Planned |
+| 4 | Order cancellation mid-route | ⬜ Planned |
+| 5 | Multiple simultaneous orders across tables | ⬜ Planned |
+| 6 | Multi-order with no confirmation at one table (skip and continue) | ⬜ Planned |
+| 7 | Multi-order with cancellation of one table mid-route | ⬜ Planned |
+
+## Demo
+
+*(Add a short Gazebo screen recording or GIF here once available)*
+
+## Notes
+
+This was developed and tested in simulation (TurtleBot3 + Gazebo) rather than on physical hardware, as the assessment focuses on ROS architecture and state-machine design rather than a specific robot platform. The design generalizes directly to real navigation stacks or other differential-drive robots with minimal changes.
