@@ -31,6 +31,24 @@ The robot's behavior is modeled as a **finite state machine** using `smach`/`sma
 - **TurtleBot3** in **Gazebo** — simulated robot and environment
 - **RViz2** — visualization, localization (AMCL), and manual goal testing
 
+## Environment Map
+
+The following map represents the restaurant environment used for the TurtleBot3 simulation. It defines the fixed navigation waypoints for the **home position, kitchen, and three customer tables**.
+
+<img width="403" height="375" alt="Screenshot from 2026-09-26 00-58-35" src="https://github.com/user-attachments/assets/ca47ec63-5390-4aef-89c4-0bb727f246b2" />
+
+### Navigation Waypoints
+
+| Location | Purpose |
+|---|---|
+| 🏠 Home | Robot starting and return position |
+| 🍳 Kitchen | Food collection point |
+| Table 1 | Customer delivery point |
+| Table 2 | Customer delivery point |
+| Table 3 | Customer delivery point |
+
+The robot uses these locations as named navigation waypoints. The corresponding coordinates are stored in `waypoints.py`, allowing the navigation logic to remain generic and independent of individual table IDs.
+
 ## Repository Structure
 
 ```
@@ -44,9 +62,21 @@ goat_butler_robot/
 └── README.md
 ```
 
-## Setup & Running
+## Prerequisites
 
-Prerequisites: ROS 2 Humble, TurtleBot3 packages, Nav2, `smach`/`smach_ros` installed.
+- Ubuntu 22.04 + ROS 2 Humble installed
+- TurtleBot3 and Nav2 packages:
+  ```bash
+  sudo apt install ros-humble-turtlebot3* ros-humble-turtlebot3-simulations ros-humble-navigation2 ros-humble-nav2-bringup
+  export TURTLEBOT3_MODEL=waffle_pi
+  echo "export TURTLEBOT3_MODEL=waffle_pi" >> ~/.bashrc
+  ```
+- SMACH:
+  ```bash
+  sudo apt install ros-humble-smach ros-humble-smach-ros
+  ```
+
+## Setup & Running
 
 ```bash
 # Build
@@ -79,7 +109,9 @@ ros2 run goat_butler_robot butler_state_machine table1
 
 ## Demo
 
-*(Add a short Gazebo screen recording or GIF here once available)*
+<!-- TODO: replace this line with the final github.com/user-attachments/assets/... URL
+     once the Milestone-1.mp4 upload finishes — "Uploading..." is a placeholder
+     GitHub shows mid-upload, not the embeddable link. -->
 
 ## Notes
 
