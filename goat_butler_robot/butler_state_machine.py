@@ -22,7 +22,6 @@ class NavHelper:
         goal.pose.header.frame_id = 'map'
         goal.pose.pose.position.x = x
         goal.pose.pose.position.y = y
-        goal.pose.pose.orientation.z = yaw  # simplify for now; use quaternion conversion for real yaw
         goal.pose.pose.orientation.w = 1.0
 
         self.node.get_logger().info(f'Navigating to {waypoint_name} ({x}, {y})')
@@ -30,50 +29,62 @@ class NavHelper:
         future = self.client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self.node, future)
         goal_handle = future.result()
+
         if not goal_handle.accepted:
+            self.node.get_logger().warn(f'Goal to {waypoint_name} REJECTED')
             return False
+
         result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(self.node, result_future)
-        return True  # refine with actual result.status check later
+        status = result_future.result().status
+        success = (status == 4)  # GoalStatus.STATUS_SUCCEEDED
+        self.node.get_logger().info(f'Arrived at {waypoint_name}: {"OK" if success else f"FAILED (status={status})"}')
+        return success
 
 
 class GoToKitchen(smach.State):
     def __init__(self, nav: NavHelper):
-        smach.State.__init__(self, outcomes=['arrived'])
+        smach.State.__init__(self, outcomes=['arrived', 'failed'])
         self.nav = nav
 
     def execute(self, userdata):
-        self.nav.go_to('kitchen')
-        return 'arrived'
+        return 'arrived' if self.nav.go_to('kitchen') else 'failed'
 
 
 class GoToTable(smach.State):
     def __init__(self, nav: NavHelper):
-        smach.State.__init__(self, outcomes=['arrived'], input_keys=['table_id'])
+        smach.State.__init__(self, outcomes=['arrived', 'failed'], input_keys=['table_id'])
         self.nav = nav
 
     def execute(self, userdata):
-        self.nav.go_to(userdata.table_id)
-        return 'arrived'
+        return 'arrived' if self.nav.go_to(userdata.table_id) else 'failed'
 
 
 class ReturnHome(smach.State):
     def __init__(self, nav: NavHelper):
-        smach.State.__init__(self, outcomes=['done'])
+        smach.State.__init__(self, outcomes=['done', 'failed'])
         self.nav = nav
 
     def execute(self, userdata):
-        self.nav.go_to('home')
-        return 'done'
+        return 'done' if self.nav.go_to('home') else 'failed'
 
 
 def build_state_machine(nav: NavHelper, table_id: str):
-    sm = smach.StateMachine(outcomes=['order_complete'])
+    sm = smach.StateMachine(outcomes=['order_complete', 'order_failed'])
     sm.userdata.table_id = table_id
     with sm:
-        smach.StateMachine.add('GO_TO_KITCHEN', GoToKitchen(nav), transitions={'arrived': 'GO_TO_TABLE'})
-        smach.StateMachine.add('GO_TO_TABLE', GoToTable(nav), transitions={'arrived': 'RETURN_HOME'})
-        smach.StateMachine.add('RETURN_HOME', ReturnHome(nav), transitions={'done': 'order_complete'})
+        smach.StateMachine.add(
+            'GO_TO_KITCHEN', GoToKitchen(nav),
+            transitions={'arrived': 'GO_TO_TABLE', 'failed': 'order_failed'}
+        )
+        smach.StateMachine.add(
+            'GO_TO_TABLE', GoToTable(nav),
+            transitions={'arrived': 'RETURN_HOME', 'failed': 'order_failed'}
+        )
+        smach.StateMachine.add(
+            'RETURN_HOME', ReturnHome(nav),
+            transitions={'done': 'order_complete', 'failed': 'order_failed'}
+        )
     return sm
 
 
