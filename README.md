@@ -109,9 +109,9 @@ ros2 run goat_butler_robot butler_state_machine table1
 
 ## Demo
 
-<!-- TODO: replace this line with the final github.com/user-attachments/assets/... URL
-     once the Milestone-1.mp4 upload finishes — "Uploading..." is a placeholder
-     GitHub shows mid-upload, not the embeddable link. -->
+The following video demonstrates Milestone 1 of the Goat Butler Robot, including autonomous navigation from the home position to the kitchen, delivery to the selected table, and return to home.
+
+[▶️ Watch Milestone 1 Demo Video](https://drive.google.com/drive/folders/1XvIMe_udGJ3wtdEZ_UHHXtWO3Cyu0a_A?usp=sharing)
 
 ## Notes
 
