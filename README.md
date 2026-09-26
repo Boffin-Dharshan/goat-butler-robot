@@ -41,6 +41,8 @@ Confirmation waiting follows the same principle: a single reusable `ConfirmListe
 
 **Fallback routing:** a timeout at the kitchen returns the robot straight home. A timeout at the table routes the robot back through the kitchen first (`RETURN_VIA_KITCHEN`), then home — matching the assessment's specified behavior for each case.
 
+**Cancellation:** a `CancelListener` (same reusable pattern as `ConfirmListener`) watches `/order/cancel` for the entire order lifecycle. `NavHelper.go_to()` polls Nav2's action result instead of blocking on it, so a cancellation can interrupt an in-progress navigation leg and cleanly cancel the Nav2 goal, rather than only being checked between legs. A cancellation while en route to the kitchen sends the robot straight home; a cancellation while en route to a table routes it back through the kitchen first (reusing `RETURN_VIA_KITCHEN` from the confirmation-timeout logic), then home — again matching the assessment's specified behavior.
+
 ## Tech Stack
 
 - **ROS 2 Humble**
@@ -127,6 +129,15 @@ ros2 topic pub --once /table1/confirm std_msgs/msg/Bool "{data: true}"
 ```
 (replace `table1` with whichever table was ordered for). If no confirmation is published, the robot returns to the kitchen first, then home.
 
+### Simulating order cancellation (Milestone 4)
+
+At any point while the robot is actively driving to the kitchen or a table, publish:
+```bash
+ros2 topic pub --once /order/cancel std_msgs/msg/Bool "{data: true}"
+```
+- Cancelled en route to the kitchen → robot returns straight home
+- Cancelled en route to a table → robot returns to the kitchen first, then home
+
 ## Milestones
 
 | # | Description | Status |
@@ -134,7 +145,7 @@ ros2 topic pub --once /table1/confirm std_msgs/msg/Bool "{data: true}"
 | 1 | Single order: home → kitchen → table → home, no confirmation | ✅ Complete |
 | 2 | Wait for confirmation at kitchen, timeout → return home | ✅ Complete |
 | 3 | Confirmation handling at both kitchen and table with fallback routing | ✅ Complete |
-| 4 | Order cancellation mid-route | ⬜ Planned |
+| 4 | Order cancellation mid-route | ✅ Complete |
 | 5 | Multiple simultaneous orders across tables | ⬜ Planned |
 | 6 | Multi-order with no confirmation at one table (skip and continue) | ⬜ Planned |
 | 7 | Multi-order with cancellation of one table mid-route | ⬜ Planned |
@@ -143,11 +154,11 @@ ros2 topic pub --once /table1/confirm std_msgs/msg/Bool "{data: true}"
 
 The following video demonstrates Milestone 1 of the Goat Butler Robot, including autonomous navigation from the home position to the kitchen, delivery to the selected table, and return to home.
 
-[▶️ Milestone 1 Demo Video](https://drive.google.com/file/d/1-HTyKQ74O6ooTu3HuX1iJB4o0SWeFfJf/view?usp=drive_link)
+[▶️ Watch Milestone 1 Demo Video](https://drive.google.com/file/d/1-HTyKQ74O6ooTu3HuX1iJB4o0SWeFfJf/view?usp=drive_link)\
 
 [▶️ Milestone 2 Demo Video](https://drive.google.com/file/d/1i2lGJgXutsLFVUqwEhDK2KUCTCJjOjZk/view?usp=drive_link)
 
-[▶️ Milestone 2 Demo Video]
+[▶️ Milestone 3 Demo Video]
 
 ## Notes
 

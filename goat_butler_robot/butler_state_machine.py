@@ -4,6 +4,7 @@ from rclpy.action import ActionClient
 from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
+from action_msgs.msg import GoalStatus
 import smach
 import sys
 import time
@@ -13,12 +14,31 @@ from goat_butler_robot.waypoints import WAYPOINTS
 CONFIRM_TIMEOUT_SEC = 15.0
 
 
-class NavHelper:
-    def __init__(self, node: Node):
+class CancelListener:
+    """Reusable — watches a cancel topic in the background for the whole order lifecycle."""
+    def __init__(self, node: Node, topic: str = '/order/cancel'):
         self.node = node
+        self.cancelled = False
+        self.sub = node.create_subscription(Bool, topic, self._callback, 10)
+
+    def _callback(self, msg: Bool):
+        if msg.data:
+            self.cancelled = True
+
+    def reset(self):
+        self.cancelled = False
+
+
+class NavHelper:
+    def __init__(self, node: Node, cancel_listener: 'CancelListener'):
+        self.node = node
+        self.cancel_listener = cancel_listener
         self.client = ActionClient(node, NavigateToPose, 'navigate_to_pose')
 
-    def go_to(self, waypoint_name: str) -> bool:
+    def go_to(self, waypoint_name: str) -> str:
+        """Returns 'success', 'failed', or 'cancelled'."""
+        self.cancel_listener.reset()   # <-- ADD THIS LINE: fresh cancel state for this leg
+
         x, y, yaw = WAYPOINTS[waypoint_name]
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
@@ -29,24 +49,31 @@ class NavHelper:
 
         self.node.get_logger().info(f'Navigating to {waypoint_name} ({x}, {y})')
         self.client.wait_for_server()
-        future = self.client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self.node, future)
-        goal_handle = future.result()
+        send_future = self.client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self.node, send_future)
+        goal_handle = send_future.result()
 
         if not goal_handle.accepted:
             self.node.get_logger().warn(f'Goal to {waypoint_name} REJECTED')
-            return False
+            return 'failed'
 
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self.node, result_future)
+
+        while not result_future.done():
+            rclpy.spin_once(self.node, timeout_sec=0.5)
+            if self.cancel_listener.cancelled:
+                self.node.get_logger().warn(f'Cancellation received while navigating to {waypoint_name} — aborting goal')
+                cancel_future = goal_handle.cancel_goal_async()
+                rclpy.spin_until_future_complete(self.node, cancel_future)
+                return 'cancelled'
+
         status = result_future.result().status
-        success = (status == 4)
+        success = (status == GoalStatus.STATUS_SUCCEEDED)
         self.node.get_logger().info(f'Arrived at {waypoint_name}: {"OK" if success else f"FAILED (status={status})"}')
-        return success
+        return 'success' if success else 'failed'
 
 
 class ConfirmListener:
-    """Reusable for any location's confirm topic — kitchen, table1, table2, table3."""
     def __init__(self, node: Node, topic: str):
         self.node = node
         self.topic = topic
@@ -71,11 +98,11 @@ class ConfirmListener:
 
 class GoToKitchen(smach.State):
     def __init__(self, nav: NavHelper):
-        smach.State.__init__(self, outcomes=['arrived', 'failed'])
+        smach.State.__init__(self, outcomes=['arrived', 'failed', 'cancelled'])
         self.nav = nav
 
     def execute(self, userdata):
-        return 'arrived' if self.nav.go_to('kitchen') else 'failed'
+        return {'success': 'arrived', 'failed': 'failed', 'cancelled': 'cancelled'}[self.nav.go_to('kitchen')]
 
 
 class WaitKitchenConfirm(smach.State):
@@ -89,15 +116,14 @@ class WaitKitchenConfirm(smach.State):
 
 class GoToTable(smach.State):
     def __init__(self, nav: NavHelper):
-        smach.State.__init__(self, outcomes=['arrived', 'failed'], input_keys=['table_id'])
+        smach.State.__init__(self, outcomes=['arrived', 'failed', 'cancelled'], input_keys=['table_id'])
         self.nav = nav
 
     def execute(self, userdata):
-        return 'arrived' if self.nav.go_to(userdata.table_id) else 'failed'
+        return {'success': 'arrived', 'failed': 'failed', 'cancelled': 'cancelled'}[self.nav.go_to(userdata.table_id)]
 
 
 class WaitTableConfirm(smach.State):
-    """Creates a fresh ConfirmListener scoped to THIS table_id, so table1/2/3 don't need separate states."""
     def __init__(self, node: Node):
         smach.State.__init__(self, outcomes=['confirmed', 'timeout'], input_keys=['table_id'])
         self.node = node
@@ -113,17 +139,19 @@ class ReturnHome(smach.State):
         self.nav = nav
 
     def execute(self, userdata):
-        return 'done' if self.nav.go_to('home') else 'failed'
+        # Home leg is never itself cancellable mid-flight per spec — treat cancelled same as failed here
+        result = self.nav.go_to('home')
+        return 'done' if result == 'success' else 'failed'
 
 
 class ReturnViaKitchen(smach.State):
-    """Table-side timeout: go back to kitchen first, THEN home — per milestone 3b."""
     def __init__(self, nav: NavHelper):
         smach.State.__init__(self, outcomes=['at_kitchen', 'failed'])
         self.nav = nav
 
     def execute(self, userdata):
-        return 'at_kitchen' if self.nav.go_to('kitchen') else 'failed'
+        result = self.nav.go_to('kitchen')
+        return 'at_kitchen' if result == 'success' else 'failed'
 
 
 def build_state_machine(nav: NavHelper, kitchen_listener: ConfirmListener, node: Node, table_id: str):
@@ -132,7 +160,11 @@ def build_state_machine(nav: NavHelper, kitchen_listener: ConfirmListener, node:
     with sm:
         smach.StateMachine.add(
             'GO_TO_KITCHEN', GoToKitchen(nav),
-            transitions={'arrived': 'WAIT_KITCHEN_CONFIRM', 'failed': 'order_failed'}
+            transitions={
+                'arrived': 'WAIT_KITCHEN_CONFIRM',
+                'failed': 'order_failed',
+                'cancelled': 'RETURN_HOME',       # cancelled en route to kitchen -> straight home
+            }
         )
         smach.StateMachine.add(
             'WAIT_KITCHEN_CONFIRM', WaitKitchenConfirm(kitchen_listener),
@@ -140,7 +172,11 @@ def build_state_machine(nav: NavHelper, kitchen_listener: ConfirmListener, node:
         )
         smach.StateMachine.add(
             'GO_TO_TABLE', GoToTable(nav),
-            transitions={'arrived': 'WAIT_TABLE_CONFIRM', 'failed': 'order_failed'}
+            transitions={
+                'arrived': 'WAIT_TABLE_CONFIRM',
+                'failed': 'order_failed',
+                'cancelled': 'RETURN_VIA_KITCHEN', # cancelled en route to table -> kitchen first, then home
+            }
         )
         smach.StateMachine.add(
             'WAIT_TABLE_CONFIRM', WaitTableConfirm(node),
@@ -160,7 +196,8 @@ def build_state_machine(nav: NavHelper, kitchen_listener: ConfirmListener, node:
 def main():
     rclpy.init()
     node = rclpy.create_node('butler_state_machine')
-    nav = NavHelper(node)
+    cancel_listener = CancelListener(node, '/order/cancel')
+    nav = NavHelper(node, cancel_listener)
     kitchen_listener = ConfirmListener(node, '/kitchen/confirm')
 
     table_id = sys.argv[1] if len(sys.argv) > 1 else 'table1'
