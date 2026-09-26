@@ -15,8 +15,7 @@ The system must generalize across multiple tables, handle confirmation waits, ti
 
 The robot's behavior is modeled as a **finite state machine** using `smach`/`smach_ros`, driven by real navigation through **Nav2** in a TurtleBot3 Gazebo simulation.
 
-<img width="1190" height="1322" alt="image" src="https://github.com/user-attachments/assets/f736efe7-3af2-42aa-90df-541c1eb89740" />
-
+<img width="1190" height="1322" alt="image" src="https://github.com/user-attachments/assets/2c58bde4-190e-460d-a715-f034a3d9b44c" />
 
 
 **State machine overview:** HOME → GO_TO_KITCHEN → WAIT_KITCHEN_CONFIRM → (confirmed) → NEXT_TABLE → GO_TO_TABLE → WAIT_TABLE_CONFIRM → (confirmed) → NEXT_TABLE (loop until queue empty) → RETURN_HOME. Any timeout or cancellation routes through RETURN_VIA_KITCHEN before RETURN_HOME. Any navigation failure routes to ORDER_FAILED.
