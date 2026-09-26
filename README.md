@@ -15,27 +15,13 @@ The system must generalize across multiple tables, handle confirmation waits, ti
 
 The robot's behavior is modeled as a **finite state machine** using `smach`/`smach_ros`, driven by real navigation through **Nav2** in a TurtleBot3 Gazebo simulation.
 
-```
-[HOME] --order received--> [GO_TO_KITCHEN] --arrived--> [WAIT_KITCHEN_CONFIRM]
-                                  |                              |
-                                  |                   confirmed  |  timeout
-                                  |                       v      v
-                                  |               [GO_TO_TABLE]  |
-                                  |                       |      |
-                                  |                  arrived     |
-                                  |                       v      |
-                                  |           [WAIT_TABLE_CONFIRM]
-                                  |                confirmed | timeout
-                                  |                       v      v
-                                  |          [RETURN_HOME]  [RETURN_VIA_KITCHEN]
-                                  |                |               |
-                                  |                v               v
-                                  |             [HOME] <----- (kitchen, then home)
-                                  |
-                                  +---- failed ----> [ORDER_FAILED]
-```
+<!-- TODO: replace this note with the exported flowchart image once generated in Napkin AI,
+     using the same github.com/user-attachments upload method as the Environment Map image below.
+     ![State Machine Flowchart](https://github.com/user-attachments/assets/PASTE_ID_HERE) -->
 
-**Key design decision — genericity over hardcoding:** every navigation call (to kitchen, to any table, back home) goes through a single reusable `NavHelper.go_to(waypoint_name)` method that sends a `NavigateToPose` action goal to Nav2 and blocks until success/failure. Table identity is passed as **state machine userdata** (`table_id`), not branched on in code — so `table1`, `table2`, `table3` are just different waypoint keys, and adding a `table4` requires zero code changes, only a new entry in `waypoints.py`.
+**State machine overview:** HOME → GO_TO_KITCHEN → WAIT_KITCHEN_CONFIRM → (confirmed) → NEXT_TABLE → GO_TO_TABLE → WAIT_TABLE_CONFIRM → (confirmed) → NEXT_TABLE (loop until queue empty) → RETURN_HOME. Any timeout or cancellation routes through RETURN_VIA_KITCHEN before RETURN_HOME. Any navigation failure routes to ORDER_FAILED.
+
+**Key design decision — genericity over hardcoding:** every navigation call (to kitchen, to any table, back home) goes through a single reusable `NavHelper.go_to(waypoint_name)` method that sends a `NavigateToPose` action goal to Nav2 and blocks until success/failure. Table identity is passed as **state machine userdata** (`table_id`/`current_table`), not branched on in code — so `table1`, `table2`, `table3` are just different waypoint keys, and adding a `table4` requires zero code changes, only a new entry in `waypoints.py`.
 
 Confirmation waiting follows the same principle: a single reusable `ConfirmListener` class subscribes to any given topic and blocks (with a timeout) until it receives a positive confirmation. It's parameterized by topic name — `WaitKitchenConfirm` uses a fixed `/kitchen/confirm` topic, while `WaitTableConfirm` dynamically builds `/{table_id}/confirm` at runtime, so table1/table2/table3 confirmation all reuse the same class and state logic with zero duplication.
 
@@ -44,6 +30,10 @@ Confirmation waiting follows the same principle: a single reusable `ConfirmListe
 **Cancellation:** a `CancelListener` (same reusable pattern as `ConfirmListener`) watches `/order/cancel` for the entire order lifecycle. `NavHelper.go_to()` polls Nav2's action result instead of blocking on it, so a cancellation can interrupt an in-progress navigation leg and cleanly cancel the Nav2 goal, rather than only being checked between legs. A cancellation while en route to the kitchen sends the robot straight home; a cancellation while en route to a table routes it back through the kitchen first (reusing `RETURN_VIA_KITCHEN` from the confirmation-timeout logic), then home — again matching the assessment's specified behavior.
 
 **Arrival visibility:** after each successful navigation leg, the robot holds position for 2 seconds (`ARRIVAL_PAUSE_SEC` in `NavHelper.go_to()`) before proceeding. This makes each arrival unambiguous when watching or recording the simulation — without it, the robot could appear to glide continuously through waypoints with no clear indication of having reached one.
+
+**Localization:** AMCL's `set_initial_pose` and `initial_pose` are preset in `nav2_params.yaml` to match the robot's fixed spawn point in the Gazebo world (the same coordinates as the `home` waypoint). This means the robot localizes automatically on launch, with no manual "2D Pose Estimate" click required in RViz — one less manual step for anyone running or reviewing the demo.
+
+**Orientation handling:** only the `home` waypoint enforces a fixed final orientation (so the robot looks consistently "docked" between orders). Kitchen and table waypoints don't force a specific heading — combined with `use_final_approach_orientation: true` in the Nav2 controller params, the robot settles smoothly into whatever direction it was already driving on arrival, instead of stopping and snapping to an arbitrary fixed direction.
 
 **Multi-table delivery (Milestone 5):** a `NextTable` state pops table IDs one at a time from a `table_queue` (populated from CLI args) and loops through `GO_TO_TABLE` until the queue is empty, then routes home. This is the multi-table version of the base delivery workflow and, per the assessment spec for this milestone, does not include confirmation waiting — that returns in Milestone 6, layered on top of this same queue-processing structure without needing to rebuild it.
 
@@ -79,8 +69,13 @@ The robot uses these locations as named navigation waypoints. The corresponding 
 goat_butler_robot/
 ├── goat_butler_robot/
 │   ├── __init__.py
-│   ├── waypoints.py           # named locations -> (x, y, yaw) coordinates
-│   └── butler_state_machine.py # SMACH states, NavHelper, ConfirmListener, main entry point
+│   ├── waypoints.py            # named locations -> (x, y, yaw) coordinates
+│   └── butler_state_machine.py # SMACH states, NavHelper, ConfirmListener, CancelListener, main entry point
+├── maps/
+│   ├── map.yaml                # bundled map metadata
+│   └── map.pgm                 # bundled map image
+├── config/
+│   └── nav2_params.yaml        # Nav2 params (Humble waffle_pi base + use_final_approach_orientation)
 ├── package.xml
 ├── setup.py
 └── README.md
@@ -111,13 +106,19 @@ source install/setup.bash
 # Terminal 1: launch simulation
 ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 
-# Terminal 2: launch navigation
-ros2 launch turtlebot3_navigation2 navigation2.launch.py use_sim_time:=true map:=<map.yaml>
-# Then set the 2D Pose Estimate in RViz to localize the robot
+# Terminal 2: launch navigation with the bundled map and custom params
+ros2 launch turtlebot3_navigation2 navigation2.launch.py \
+  use_sim_time:=true \
+  map:=$(ros2 pkg prefix goat_butler_robot)/share/goat_butler_robot/maps/map.yaml \
+  params_file:=$(ros2 pkg prefix goat_butler_robot)/share/goat_butler_robot/config/nav2_params.yaml
+# AMCL's initial pose is preset to match the robot's Gazebo spawn point (see Localization
+# note below), so it localizes automatically — no manual 2D Pose Estimate click required.
 
 # Terminal 3: run the butler state machine for a given table
 ros2 run goat_butler_robot butler_state_machine table1
 ```
+
+> The launch command above resolves the map and params paths through the installed package share directory, so it works on any machine after `colcon build` — no hardcoded local paths required.
 
 ### Simulating confirmations (Milestones 2 & 3)
 
@@ -163,10 +164,9 @@ ros2 run goat_butler_robot butler_state_machine table1 table2 table3
 
 ## Demo
 
-The following video demonstrates Milestone 1 of the Goat Butler Robot, including autonomous navigation from the home position to the kitchen, delivery to the selected table, and return to home.
+The following videos demonstrate each completed milestone of the Goat Butler Robot.
 
-
-[▶️ Watch Milestone 1 Demo Video](https://drive.google.com/file/d/1-HTyKQ74O6ooTu3HuX1iJB4o0SWeFfJf/view?usp=drive_link)
+[▶️ Milestone 1 Demo Video](https://drive.google.com/file/d/1-HTyKQ74O6ooTu3HuX1iJB4o0SWeFfJf/view?usp=drive_link)
 
 [▶️ Milestone 2 Demo Video](https://drive.google.com/file/d/1i2lGJgXutsLFVUqwEhDK2KUCTCJjOjZk/view?usp=drive_link)
 
