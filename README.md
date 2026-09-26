@@ -170,11 +170,11 @@ The following video demonstrates Milestone 1 of the Goat Butler Robot, including
 
 [▶️ Milestone 2 Demo Video](https://drive.google.com/file/d/1i2lGJgXutsLFVUqwEhDK2KUCTCJjOjZk/view?usp=drive_link)
 
-[▶️ Milestone 3 Demo Video]
+[▶️ Milestone 3 Demo Video](https://drive.google.com/file/d/1COn4YoiQpL7wc4BLA1u53EOtKGrdKqSu/view?usp=drive_link)
 
-[▶️ Milestone 4 Demo Video]
+[▶️ Milestone 4 Demo Video](https://drive.google.com/file/d/10Y7ooquQ3_nhR97tYfji5vdCAN6F5i5R/view?usp=drive_link)
 
-[▶️ Milestone 5 Demo Video]
+[▶️ Milestone 5 Demo Video](https://drive.google.com/file/d/1D6VxWmsI3y3cJDqeCJnEEYfqIkRh1dai/view?usp=drive_link)
 
 ## Notes
 
