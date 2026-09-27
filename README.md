@@ -165,7 +165,7 @@ ros2 run goat_butler_robot butler_state_machine table1 table2 table3
 
 The following videos demonstrate each completed milestone of the Goat Butler Robot.
 
-[▶️ Milestone 1 Demo Video](https://drive.google.com/file/d/1-HTyKQ74O6ooTu3HuX1iJB4o0SWeFfJf/view?usp=drive_link)
+[▶️ Milestone 1 Demo Video](https://drive.google.com/file/d/1jyGbYD_MXxP78RoHZrJIueGyyNOyKEY1/view?usp=drive_link)
 
 [▶️ Milestone 2 Demo Video](https://drive.google.com/file/d/1i2lGJgXutsLFVUqwEhDK2KUCTCJjOjZk/view?usp=drive_link)
 
