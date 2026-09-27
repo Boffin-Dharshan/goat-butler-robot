@@ -23,7 +23,7 @@ def yaw_to_quaternion(yaw: float):
 
 
 class CancelListener:
-    """Watches a cancel topic for the whole order lifecycle. Reusable across every nav leg."""
+    """Watches a single global cancel topic for the whole order. Reusable across every nav leg."""
     def __init__(self, node: Node, topic: str = '/order/cancel'):
         self.node = node
         self.cancelled = False
@@ -35,6 +35,29 @@ class CancelListener:
 
     def reset(self):
         self.cancelled = False
+
+
+class TableCancelRegistry:
+    """Subscribes to /{table}/cancel for every table in the initial queue, tracking cancellation
+    per table. Used for Milestone 7 (cancel ONE table's order, skip it, continue the others) —
+    distinct from CancelListener, which aborts the whole run."""
+    def __init__(self, node: Node, table_names: list):
+        self.node = node
+        self.cancelled = {t: False for t in table_names}
+        self._subs = []
+        for t in table_names:
+            self._subs.append(
+                node.create_subscription(Bool, f'/{t}/cancel', self._make_callback(t), 10)
+            )
+
+    def _make_callback(self, table: str):
+        def callback(msg: Bool):
+            if msg.data:
+                self.cancelled[table] = True
+        return callback
+
+    def is_cancelled(self, table: str) -> bool:
+        return self.cancelled.get(table, False)
 
 
 class ConfirmListener:
@@ -68,8 +91,9 @@ class NavHelper:
         self.cancel_listener = cancel_listener
         self.client = ActionClient(node, NavigateToPose, 'navigate_to_pose')
 
-    def go_to(self, waypoint_name: str) -> str:
-        """Returns 'success', 'failed', or 'cancelled'."""
+    def go_to(self, waypoint_name: str, extra_cancel_check=None) -> str:
+        """Returns 'success', 'failed', 'cancelled' (global order cancel), or
+        'table_cancelled' (this one table's order was cancelled, per extra_cancel_check)."""
         self.cancel_listener.reset()
         x, y, yaw = WAYPOINTS[waypoint_name]
         goal = NavigateToPose.Goal()
@@ -99,12 +123,20 @@ class NavHelper:
         result_future = goal_handle.get_result_async()
         while not result_future.done():
             rclpy.spin_once(self.node, timeout_sec=0.5)
+
             if self.cancel_listener.cancelled:
-                self.node.get_logger().warn(f'Cancellation received while navigating to {waypoint_name} — aborting goal')
+                self.node.get_logger().warn(f'Global cancellation received while navigating to {waypoint_name} — aborting goal')
                 cancel_future = goal_handle.cancel_goal_async()
                 rclpy.spin_until_future_complete(self.node, cancel_future)
                 time.sleep(CANCEL_SETTLE_SEC)
                 return 'cancelled'
+
+            if extra_cancel_check and extra_cancel_check():
+                self.node.get_logger().warn(f'Order for {waypoint_name} was cancelled — skipping this table')
+                cancel_future = goal_handle.cancel_goal_async()
+                rclpy.spin_until_future_complete(self.node, cancel_future)
+                time.sleep(CANCEL_SETTLE_SEC)
+                return 'table_cancelled'
 
         status = result_future.result().status
         success = (status == GoalStatus.STATUS_SUCCEEDED)
@@ -125,38 +157,74 @@ class GoToKitchen(smach.State):
 
 
 class NextTable(smach.State):
-    """Pops the next table off the queue. If queue is empty, all deliveries are attempted ->
-    per Milestone 6, ALWAYS route via kitchen before home, regardless of confirmation outcomes."""
-    def __init__(self):
+    """Pops the next table off the queue, skipping any table whose order was cancelled
+    (Milestone 7). If the queue empties out, the ending depends on whether ANY table was
+    skipped or cancelled this run: a clean run (every table confirmed) goes straight home
+    (matching Milestone 5's behavior); a run with at least one skip/cancel routes via kitchen
+    first (per the M6/M7 spec text), since the robot is assumed to be carrying dishes back
+    from a skipped attempt. This is a documented interpretation — see README design notes."""
+    def __init__(self, table_cancel_registry: 'TableCancelRegistry'):
         smach.State.__init__(
             self,
-            outcomes=['next', 'queue_empty'],
-            input_keys=['table_queue'],
+            outcomes=['next', 'queue_empty_clean', 'queue_empty_skipped'],
+            input_keys=['table_queue', 'any_skipped'],
             output_keys=['table_queue', 'current_table']
         )
+        self.registry = table_cancel_registry
 
     def execute(self, userdata):
-        if not userdata.table_queue:
-            return 'queue_empty'
-        userdata.current_table = userdata.table_queue.pop(0)
-        userdata.table_queue = userdata.table_queue
-        return 'next'
+        queue = userdata.table_queue
+        while queue:
+            candidate = queue.pop(0)
+            if self.registry.is_cancelled(candidate):
+                self.registry.node.get_logger().warn(
+                    f'Order for {candidate} was already cancelled before departure — skipping'
+                )
+                userdata.any_skipped = True
+                continue
+            userdata.current_table = candidate
+            userdata.table_queue = queue
+            return 'next'
+        userdata.table_queue = queue
+        return 'queue_empty_skipped' if userdata.any_skipped else 'queue_empty_clean'
 
 
 class GoToTable(smach.State):
-    def __init__(self, nav: NavHelper):
-        smach.State.__init__(self, outcomes=['arrived', 'failed', 'cancelled'], input_keys=['current_table'])
+    def __init__(self, nav: NavHelper, table_cancel_registry: 'TableCancelRegistry'):
+        smach.State.__init__(
+            self,
+            outcomes=['arrived', 'failed', 'cancelled', 'table_cancelled'],
+            input_keys=['current_table'],
+            output_keys=['any_skipped']
+        )
         self.nav = nav
+        self.registry = table_cancel_registry
 
     def execute(self, userdata):
-        return {'success': 'arrived', 'failed': 'failed', 'cancelled': 'cancelled'}[self.nav.go_to(userdata.current_table)]
+        table = userdata.current_table
+        check = lambda: self.registry.is_cancelled(table)
+        result = self.nav.go_to(table, extra_cancel_check=check)
+        if result == 'table_cancelled':
+            userdata.any_skipped = True
+        return {
+            'success': 'arrived',
+            'failed': 'failed',
+            'cancelled': 'cancelled',
+            'table_cancelled': 'table_cancelled',
+        }[result]
 
 
 class WaitTableConfirm(smach.State):
     """Waits for confirmation at the current table. Whether confirmed or timed out, the
-    delivery loop moves on to the next table — a timeout means 'skip this table', not fail."""
+    delivery loop moves on to the next table — a timeout means 'skip this table', not fail.
+    A timeout also marks any_skipped, affecting the final routing decision in NextTable."""
     def __init__(self, node: Node):
-        smach.State.__init__(self, outcomes=['next'], input_keys=['current_table'])
+        smach.State.__init__(
+            self,
+            outcomes=['next'],
+            input_keys=['current_table'],
+            output_keys=['any_skipped']
+        )
         self.node = node
 
     def execute(self, userdata):
@@ -164,6 +232,7 @@ class WaitTableConfirm(smach.State):
         confirmed = listener.wait(CONFIRM_TIMEOUT_SEC)
         if not confirmed:
             self.node.get_logger().warn(f'No confirmation at {userdata.current_table} — skipping, continuing to next table')
+            userdata.any_skipped = True
         return 'next'
 
 
@@ -187,10 +256,11 @@ class ReturnViaKitchen(smach.State):
         return 'at_kitchen' if result == 'success' else 'failed'
 
 
-def build_state_machine(nav: NavHelper, node: Node, table_queue: list):
+def build_state_machine(nav: NavHelper, node: Node, table_queue: list, table_cancel_registry: 'TableCancelRegistry'):
     sm = smach.StateMachine(outcomes=['order_complete', 'order_failed'])
     sm.userdata.table_queue = list(table_queue)
     sm.userdata.current_table = None
+    sm.userdata.any_skipped = False  # tracks whether any table was skipped/cancelled/unconfirmed this run
 
     with sm:
         smach.StateMachine.add(
@@ -198,16 +268,25 @@ def build_state_machine(nav: NavHelper, node: Node, table_queue: list):
             transitions={'arrived': 'NEXT_TABLE', 'failed': 'order_failed', 'cancelled': 'RETURN_HOME'}
         )
         smach.StateMachine.add(
-            'NEXT_TABLE', NextTable(),
-            transitions={'next': 'GO_TO_TABLE', 'queue_empty': 'RETURN_VIA_KITCHEN'}  # M6: always via kitchen at the end
+            'NEXT_TABLE', NextTable(table_cancel_registry),
+            transitions={
+                'next': 'GO_TO_TABLE',
+                'queue_empty_clean': 'RETURN_HOME',        # no skips this run -> straight home
+                'queue_empty_skipped': 'RETURN_VIA_KITCHEN', # at least one skip/cancel -> via kitchen first
+            }
         )
         smach.StateMachine.add(
-            'GO_TO_TABLE', GoToTable(nav),
-            transitions={'arrived': 'WAIT_TABLE_CONFIRM', 'failed': 'order_failed', 'cancelled': 'RETURN_VIA_KITCHEN'}
+            'GO_TO_TABLE', GoToTable(nav, table_cancel_registry),
+            transitions={
+                'arrived': 'WAIT_TABLE_CONFIRM',
+                'failed': 'order_failed',
+                'cancelled': 'RETURN_VIA_KITCHEN',       # global /order/cancel -> abort whole run
+                'table_cancelled': 'NEXT_TABLE',          # this table's order cancelled -> skip, keep going
+            }
         )
         smach.StateMachine.add(
             'WAIT_TABLE_CONFIRM', WaitTableConfirm(node),
-            transitions={'next': 'NEXT_TABLE'}  # confirmed or timed out -> move to next table either way
+            transitions={'next': 'NEXT_TABLE'}
         )
         smach.StateMachine.add(
             'RETURN_VIA_KITCHEN', ReturnViaKitchen(nav),
@@ -227,8 +306,9 @@ def main():
     nav = NavHelper(node, cancel_listener)
 
     table_queue = sys.argv[1:] if len(sys.argv) > 1 else ['table1']
+    table_cancel_registry = TableCancelRegistry(node, table_queue)
 
-    sm = build_state_machine(nav, node, table_queue)
+    sm = build_state_machine(nav, node, table_queue, table_cancel_registry)
     outcome = sm.execute()
 
     node.get_logger().info(f'State machine finished: {outcome}')
