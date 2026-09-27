@@ -39,6 +39,12 @@ Confirmation waiting follows the same principle: a single reusable `ConfirmListe
 
 **Cancel-then-return timing fix:** cancelling navigation and immediately sending the next goal (e.g. cancel en route to a table, then navigate to the kitchen) could cause Nav2 to instantly abort the new goal, because its action server hadn't finished releasing the cancelled one yet. Fixed with a short settle delay (`CANCEL_SETTLE_SEC`) after a cancellation is confirmed, before the state machine's next navigation call.
 
+**Per-table cancellation (Milestone 7, in progress):** a `TableCancelRegistry` subscribes to `/{table}/cancel` for every table in the run's queue, tracking cancellation independently per table — distinct from `CancelListener`, which aborts the entire order. `NextTable` skips any table already cancelled before departure; `GoToTable` also aborts mid-flight if that specific table's order is cancelled while en route, then continues the loop to the next table rather than aborting the whole run.
+
+**Design decision — conditional kitchen routing at the end of a multi-table run:** the assessment spec states, for Milestones 6 and 7, that "after finishing the delivery of the final table, the robot goes to the kitchen before going to the home position." Every example given for these milestones happens to involve a skipped or cancelled table, so the spec doesn't explicitly define behavior for a fully clean multi-table run (every table confirmed, nothing skipped). We interpreted the kitchen stop as conditional on at least one skip or cancellation having occurred during the run — reasoning that the stop plausibly exists so the robot can return any uncollected/unused item to the kitchen, which wouldn't apply to a run where every delivery succeeded cleanly. A clean run therefore returns straight home, matching Milestone 5's behavior; a run with any skip or cancellation routes via the kitchen first, matching the literal M6/M7 text. This is a documented judgment call on an ambiguous case, not a deviation from an explicit requirement — the alternative (always via kitchen, regardless of outcome) is one line to restore if a strictly literal reading is preferred.
+
+**Nav2 orientation tuning:** the default TurtleBot3 Nav2 params include a `RotateToGoal` trajectory critic and a `yaw_goal_tolerance` on the goal checker, both of which force the robot to rotate in place to match a specific final heading before a goal is considered reached — even at waypoints where no specific orientation matters. Since only the `home` waypoint needs a consistent final orientation, `RotateToGoal` was removed from the active critics list, `GoalAlign.scale` was set to `0.0`, and `general_goal_checker.yaw_goal_tolerance` was loosened, so kitchen/table arrivals complete as soon as the robot reaches position, without an unnecessary spin-in-place.
+
 **Multi-table delivery (Milestone 5):** a `NextTable` state pops table IDs one at a time from a `table_queue` (populated from CLI args) and loops through `GO_TO_TABLE` until the queue is empty, then routes home. This is the multi-table version of the base delivery workflow and, per the assessment spec for this milestone, does not include confirmation waiting — that returns in Milestone 6, layered on top of this same queue-processing structure without needing to rebuild it.
 
 ## Tech Stack
@@ -162,6 +168,14 @@ ros2 topic pub --once /table3/confirm std_msgs/msg/Bool "{data: true}"
 ```
 The robot will always route through the kitchen once all tables have been attempted, then return home.
 
+### Simulating per-table cancellation (Milestone 7)
+
+To cancel one specific table's order — either before the robot departs for it, or while it's en route — publish to that table's own cancel topic:
+```bash
+ros2 topic pub --once /table2/cancel std_msgs/msg/Bool "{data: true}"
+```
+The robot skips only that table and continues delivering to the rest of the queue. If any table was skipped or cancelled during the run, the robot routes via the kitchen before returning home; a fully clean run (every table confirmed) returns straight home.
+
 ## Milestones
 
 | # | Description | Status |
@@ -189,6 +203,8 @@ The following videos demonstrate each completed milestone of the Goat Butler Rob
 [▶️ Milestone 5 Demo Video](https://drive.google.com/file/d/1D6VxWmsI3y3cJDqeCJnEEYfqIkRh1dai/view?usp=drive_link)
 
 [▶️ Milestone 6 Demo Video](https://drive.google.com/file/d/1xj8oyPa79WeCi5jYk0X7QB-Tgt693122/view?usp=drive_link)
+
+[▶️ Milestone 7 Demo Video](https://drive.google.com/file/d/1PWxdecU_l3_9OCfTMLPUm3lgKuny9CTc/view?usp=drive_link)
 
 ## Notes
 
