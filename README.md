@@ -15,9 +15,8 @@ The system must generalize across multiple tables, handle confirmation waits, ti
 
 The robot's behavior is modeled as a **finite state machine** using `smach`/`smach_ros`, driven by real navigation through **Nav2** in a TurtleBot3 Gazebo simulation.
 
-<!-- TODO: replace this note with the exported flowchart image once generated in Napkin AI,
-     using the same github.com/user-attachments upload method as the Environment Map image below.
-     ![State Machine Flowchart](https://github.com/user-attachments/assets/PASTE_ID_HERE) -->
+<img width="1472" height="1052" alt="image" src="https://github.com/user-attachments/assets/d7180ba0-9d1a-42a4-9fd2-2d3dde2a5e52" />
+
 
 **State machine overview:** HOME → GO_TO_KITCHEN → WAIT_KITCHEN_CONFIRM → (confirmed) → NEXT_TABLE → GO_TO_TABLE → WAIT_TABLE_CONFIRM → (confirmed) → NEXT_TABLE (loop until queue empty) → RETURN_HOME. Any timeout or cancellation routes through RETURN_VIA_KITCHEN before RETURN_HOME. Any navigation failure routes to ORDER_FAILED.
 
@@ -39,7 +38,7 @@ Confirmation waiting follows the same principle: a single reusable `ConfirmListe
 
 **Cancel-then-return timing fix:** cancelling navigation and immediately sending the next goal (e.g. cancel en route to a table, then navigate to the kitchen) could cause Nav2 to instantly abort the new goal, because its action server hadn't finished releasing the cancelled one yet. Fixed with a short settle delay (`CANCEL_SETTLE_SEC`) after a cancellation is confirmed, before the state machine's next navigation call.
 
-**Per-table cancellation (Milestone 7, in progress):** a `TableCancelRegistry` subscribes to `/{table}/cancel` for every table in the run's queue, tracking cancellation independently per table — distinct from `CancelListener`, which aborts the entire order. `NextTable` skips any table already cancelled before departure; `GoToTable` also aborts mid-flight if that specific table's order is cancelled while en route, then continues the loop to the next table rather than aborting the whole run.
+**Per-table cancellation (Milestone 7):** a `TableCancelRegistry` subscribes to `/{table}/cancel` for every table in the run's queue, tracking cancellation independently per table — distinct from `CancelListener`, which aborts the entire order. `NextTable` skips any table already cancelled before departure; `GoToTable` also aborts mid-flight if that specific table's order is cancelled while en route, then continues the loop to the next table rather than aborting the whole run.
 
 **Design decision — conditional kitchen routing at the end of a multi-table run:** the assessment spec states, for Milestones 6 and 7, that "after finishing the delivery of the final table, the robot goes to the kitchen before going to the home position." Every example given for these milestones happens to involve a skipped or cancelled table, so the spec doesn't explicitly define behavior for a fully clean multi-table run (every table confirmed, nothing skipped). We interpreted the kitchen stop as conditional on at least one skip or cancellation having occurred during the run — reasoning that the stop plausibly exists so the robot can return any uncollected/unused item to the kitchen, which wouldn't apply to a run where every delivery succeeded cleanly. A clean run therefore returns straight home, matching Milestone 5's behavior; a run with any skip or cancellation routes via the kitchen first, matching the literal M6/M7 text. This is a documented judgment call on an ambiguous case, not a deviation from an explicit requirement — the alternative (always via kitchen, regardless of outcome) is one line to restore if a strictly literal reading is preferred.
 
@@ -186,7 +185,7 @@ The robot skips only that table and continues delivering to the rest of the queu
 | 4 | Order cancellation mid-route | ✅ Complete |
 | 5 | Multiple simultaneous orders across tables | ✅ Complete |
 | 6 | Multi-order with no confirmation at one table (skip and continue) | ✅ Complete |
-| 7 | Multi-order with cancellation of one table mid-route | ⬜ Planned |
+| 7 | Multi-order with cancellation of one table mid-route | ✅ Complete |
 
 ## Demo
 
