@@ -12,7 +12,9 @@ import math
 
 from goat_butler_robot.waypoints import WAYPOINTS
 
-ARRIVAL_PAUSE_SEC = 2.0  # brief pause after each successful arrival so it's visually clear in Gazebo/demo
+ARRIVAL_PAUSE_SEC = 2.0
+CANCEL_SETTLE_SEC = 1.0
+CONFIRM_TIMEOUT_SEC = 15.0
 
 
 def yaw_to_quaternion(yaw: float):
@@ -35,6 +37,30 @@ class CancelListener:
         self.cancelled = False
 
 
+class ConfirmListener:
+    """Reusable confirmation waiter — subscribes to any given topic (e.g. /table1/confirm)."""
+    def __init__(self, node: Node, topic: str):
+        self.node = node
+        self.topic = topic
+        self.confirmed = False
+        self.sub = node.create_subscription(Bool, topic, self._callback, 10)
+
+    def _callback(self, msg: Bool):
+        if msg.data:
+            self.confirmed = True
+
+    def wait(self, timeout_sec: float) -> bool:
+        self.confirmed = False
+        start = time.time()
+        while time.time() - start < timeout_sec:
+            rclpy.spin_once(self.node, timeout_sec=0.5)
+            if self.confirmed:
+                self.node.get_logger().info(f'Confirmation received on {self.topic}')
+                return True
+        self.node.get_logger().warn(f'Timeout waiting for confirmation on {self.topic}')
+        return False
+
+
 class NavHelper:
     """Single reusable nav function — every state calls this, nothing hardcoded per-location."""
     def __init__(self, node: Node, cancel_listener: 'CancelListener'):
@@ -53,15 +79,10 @@ class NavHelper:
         goal.pose.pose.position.y = y
 
         if waypoint_name == 'home':
-            # Only home enforces a fixed "parked" orientation, using its stored yaw.
             qz, qw = yaw_to_quaternion(yaw)
             goal.pose.pose.orientation.z = qz
             goal.pose.pose.orientation.w = qw
         else:
-            # Kitchen/tables: no fixed final heading forced here. Combined with
-            # use_final_approach_orientation:true in nav2_params.yaml, the robot
-            # simply stops facing however it approached, instead of wasting time
-            # spinning in place to match an arbitrary orientation.
             goal.pose.pose.orientation.z = 0.0
             goal.pose.pose.orientation.w = 1.0
 
@@ -82,6 +103,7 @@ class NavHelper:
                 self.node.get_logger().warn(f'Cancellation received while navigating to {waypoint_name} — aborting goal')
                 cancel_future = goal_handle.cancel_goal_async()
                 rclpy.spin_until_future_complete(self.node, cancel_future)
+                time.sleep(CANCEL_SETTLE_SEC)
                 return 'cancelled'
 
         status = result_future.result().status
@@ -103,7 +125,8 @@ class GoToKitchen(smach.State):
 
 
 class NextTable(smach.State):
-    """Pops the next table off the queue. If queue is empty, all deliveries are done -> go home."""
+    """Pops the next table off the queue. If queue is empty, all deliveries are attempted ->
+    per Milestone 6, ALWAYS route via kitchen before home, regardless of confirmation outcomes."""
     def __init__(self):
         smach.State.__init__(
             self,
@@ -116,7 +139,7 @@ class NextTable(smach.State):
         if not userdata.table_queue:
             return 'queue_empty'
         userdata.current_table = userdata.table_queue.pop(0)
-        userdata.table_queue = userdata.table_queue  # SMACH needs explicit reassignment to propagate
+        userdata.table_queue = userdata.table_queue
         return 'next'
 
 
@@ -127,6 +150,21 @@ class GoToTable(smach.State):
 
     def execute(self, userdata):
         return {'success': 'arrived', 'failed': 'failed', 'cancelled': 'cancelled'}[self.nav.go_to(userdata.current_table)]
+
+
+class WaitTableConfirm(smach.State):
+    """Waits for confirmation at the current table. Whether confirmed or timed out, the
+    delivery loop moves on to the next table — a timeout means 'skip this table', not fail."""
+    def __init__(self, node: Node):
+        smach.State.__init__(self, outcomes=['next'], input_keys=['current_table'])
+        self.node = node
+
+    def execute(self, userdata):
+        listener = ConfirmListener(self.node, f'/{userdata.current_table}/confirm')
+        confirmed = listener.wait(CONFIRM_TIMEOUT_SEC)
+        if not confirmed:
+            self.node.get_logger().warn(f'No confirmation at {userdata.current_table} — skipping, continuing to next table')
+        return 'next'
 
 
 class ReturnHome(smach.State):
@@ -149,9 +187,9 @@ class ReturnViaKitchen(smach.State):
         return 'at_kitchen' if result == 'success' else 'failed'
 
 
-def build_state_machine(nav: NavHelper, table_queue: list):
+def build_state_machine(nav: NavHelper, node: Node, table_queue: list):
     sm = smach.StateMachine(outcomes=['order_complete', 'order_failed'])
-    sm.userdata.table_queue = list(table_queue)  # copy, so caller's list isn't mutated
+    sm.userdata.table_queue = list(table_queue)
     sm.userdata.current_table = None
 
     with sm:
@@ -161,11 +199,15 @@ def build_state_machine(nav: NavHelper, table_queue: list):
         )
         smach.StateMachine.add(
             'NEXT_TABLE', NextTable(),
-            transitions={'next': 'GO_TO_TABLE', 'queue_empty': 'RETURN_HOME'}
+            transitions={'next': 'GO_TO_TABLE', 'queue_empty': 'RETURN_VIA_KITCHEN'}  # M6: always via kitchen at the end
         )
         smach.StateMachine.add(
             'GO_TO_TABLE', GoToTable(nav),
-            transitions={'arrived': 'NEXT_TABLE', 'failed': 'order_failed', 'cancelled': 'RETURN_VIA_KITCHEN'}
+            transitions={'arrived': 'WAIT_TABLE_CONFIRM', 'failed': 'order_failed', 'cancelled': 'RETURN_VIA_KITCHEN'}
+        )
+        smach.StateMachine.add(
+            'WAIT_TABLE_CONFIRM', WaitTableConfirm(node),
+            transitions={'next': 'NEXT_TABLE'}  # confirmed or timed out -> move to next table either way
         )
         smach.StateMachine.add(
             'RETURN_VIA_KITCHEN', ReturnViaKitchen(nav),
@@ -184,10 +226,9 @@ def main():
     cancel_listener = CancelListener(node, '/order/cancel')
     nav = NavHelper(node, cancel_listener)
 
-    # Accept one or more table names as CLI args, e.g.: table1 table2 table3
     table_queue = sys.argv[1:] if len(sys.argv) > 1 else ['table1']
 
-    sm = build_state_machine(nav, table_queue)
+    sm = build_state_machine(nav, node, table_queue)
     outcome = sm.execute()
 
     node.get_logger().info(f'State machine finished: {outcome}')
